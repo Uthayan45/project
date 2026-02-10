@@ -2,11 +2,11 @@ import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import pkg from "pg";
+import pg from "pg";
 import dotenv from "dotenv";
 
 dotenv.config();
-const { Pool } = pkg;
+const { Pool } = pg;
 
 const app = express();
 app.use(cors());
@@ -14,51 +14,53 @@ app.use(express.json());
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
-// Register
-app.post("/api/register", async (req, res) => {
-  const { username, email, password } = req.body;
-  const hashed = await bcrypt.hash(password, 10);
-
-  try {
-    const result = await pool.query(
-      "INSERT INTO users(username,email,password) VALUES($1,$2,$3) RETURNING id",
-      [username, email, hashed]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(400).json({ error: "User already exists" });
+  ssl: {
+    rejectUnauthorized: false
   }
 });
 
-// Login
+app.get("/", (req, res) => {
+  res.send("API Running ✅");
+});
+
+app.get("/db-test", async (req, res) => {
+  try {
+    const result = await pool.query("select now()");
+    res.json({ db: "connected", time: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ db: "failed", error: err.message });
+  }
+});
+
+app.post("/api/register", async (req, res) => {
+  const { username, email, password } = req.body;
+  const hash = await bcrypt.hash(password, 10);
+
+  try {
+    await pool.query(
+      "insert into users(username,email,password) values($1,$2,$3)",
+      [username, email, hash]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
-  const result = await pool.query(
-    "SELECT * FROM users WHERE email=$1",
-    [email]
-  );
-
-  if (result.rows.length === 0)
-    return res.status(401).json({ error: "Invalid credentials" });
+  const result = await pool.query("select * from users where email=$1", [email]);
+  if (!result.rows.length) return res.status(401).json({ error: "Invalid email" });
 
   const user = result.rows[0];
-  const match = await bcrypt.compare(password, user.password);
+  const ok = await bcrypt.compare(password, user.password);
+  if (!ok) return res.status(401).json({ error: "Wrong password" });
 
-  if (!match)
-    return res.status(401).json({ error: "Invalid credentials" });
-
-  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-    expiresIn: "1h",
-  });
-
+  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET);
   res.json({ token, username: user.username });
 });
 
-app.get("/", (req, res) => res.send("API Running"));
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("Server running"));
+app.listen(process.env.PORT || 5000, () =>
+  console.log("Server running")
+);
